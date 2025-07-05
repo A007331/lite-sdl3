@@ -1,10 +1,11 @@
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <stdbool.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 #include "api.h"
 #include "rencache.h"
 #ifdef _WIN32
@@ -46,55 +47,22 @@ top:
   }
 
   switch (e.type) {
-    case SDL_QUIT:
-      lua_pushstring(L, "quit");
-      return 1;
-
-    case SDL_WINDOWEVENT:
-      if (e.window.event == SDL_WINDOWEVENT_RESIZED) {
-        lua_pushstring(L, "resized");
-        lua_pushnumber(L, e.window.data1);
-        lua_pushnumber(L, e.window.data2);
-        return 3;
-      } else if (e.window.event == SDL_WINDOWEVENT_EXPOSED) {
-        rencache_invalidate();
-        lua_pushstring(L, "exposed");
-        return 1;
-      }
-      /* on some systems, when alt-tabbing to the window SDL will queue up
-      ** several KEYDOWN events for the `tab` key; we flush all keydown
-      ** events on focus so these are discarded */
-      if (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
-        SDL_FlushEvent(SDL_KEYDOWN);
-      }
-      goto top;
-
-    case SDL_DROPFILE:
-      SDL_GetGlobalMouseState(&mx, &my);
-      SDL_GetWindowPosition(window, &wx, &wy);
-      lua_pushstring(L, "filedropped");
-      lua_pushstring(L, e.drop.file);
-      lua_pushnumber(L, mx - wx);
-      lua_pushnumber(L, my - wy);
-      SDL_free(e.drop.file);
-      return 4;
-
-    case SDL_KEYDOWN:
+    case SDL_EVENT_KEY_DOWN:
       lua_pushstring(L, "keypressed");
-      lua_pushstring(L, key_name(buf, e.key.keysym.sym));
+      lua_pushstring(L, key_name(buf, e.key.key));
       return 2;
 
-    case SDL_KEYUP:
+    case SDL_EVENT_KEY_UP:
       lua_pushstring(L, "keyreleased");
-      lua_pushstring(L, key_name(buf, e.key.keysym.sym));
+      lua_pushstring(L, key_name(buf, e.key.key));
       return 2;
 
-    case SDL_TEXTINPUT:
+    case SDL_EVENT_TEXT_INPUT:
       lua_pushstring(L, "textinput");
       lua_pushstring(L, e.text.text);
       return 2;
 
-    case SDL_MOUSEBUTTONDOWN:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
       if (e.button.button == 1) { SDL_CaptureMouse(1); }
       lua_pushstring(L, "mousepressed");
       lua_pushstring(L, button_name(e.button.button));
@@ -103,7 +71,7 @@ top:
       lua_pushnumber(L, e.button.clicks);
       return 5;
 
-    case SDL_MOUSEBUTTONUP:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
       if (e.button.button == 1) { SDL_CaptureMouse(0); }
       lua_pushstring(L, "mousereleased");
       lua_pushstring(L, button_name(e.button.button));
@@ -111,7 +79,7 @@ top:
       lua_pushnumber(L, e.button.y);
       return 4;
 
-    case SDL_MOUSEMOTION:
+    case SDL_EVENT_MOUSE_MOTION:
       lua_pushstring(L, "mousemoved");
       lua_pushnumber(L, e.motion.x);
       lua_pushnumber(L, e.motion.y);
@@ -119,10 +87,45 @@ top:
       lua_pushnumber(L, e.motion.yrel);
       return 5;
 
-    case SDL_MOUSEWHEEL:
+    case SDL_EVENT_MOUSE_WHEEL:
       lua_pushstring(L, "mousewheel");
       lua_pushnumber(L, e.wheel.y);
       return 2;
+
+    case SDL_EVENT_QUIT:
+      lua_pushstring(L, "quit");
+      return 1;
+
+    case SDL_EVENT_WINDOW_RESIZED:
+      lua_pushstring(L, "resized");
+      lua_pushnumber(L, e.window.data1);
+      lua_pushnumber(L, e.window.data2);
+      return 3;
+
+    case SDL_EVENT_WINDOW_EXPOSED:
+      rencache_invalidate();
+      lua_pushstring(L, "exposed");
+      return 1;
+
+    /* on some systems, when alt-tabbing to the window SDL will queue up
+      * * several KEYDOWN events for the `tab` key; we flush all keydown
+      ** events on focus so these are discarded */
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+      SDL_FlushEvent(SDL_EVENT_KEY_DOWN);
+      goto top;
+
+    case SDL_EVENT_DROP_FILE:
+    {
+      float f32_mx, f32_my;
+      SDL_GetGlobalMouseState(&f32_mx, &f32_my);
+      mx = (int)(f32_mx); my = (int)(f32_my);
+      SDL_GetWindowPosition(window, &wx, &wy);
+      lua_pushstring(L, "filedropped");
+      lua_pushstring(L, e.drop.data);
+      lua_pushnumber(L, mx - wx);
+      lua_pushnumber(L, my - wy);
+      return 4;
+    }
 
     default:
       goto top;
@@ -139,7 +142,7 @@ static int f_wait_event(lua_State *L) {
 }
 
 
-static SDL_Cursor* cursor_cache[SDL_SYSTEM_CURSOR_HAND + 1];
+static SDL_Cursor* cursor_cache[SDL_SYSTEM_CURSOR_POINTER + 1];
 
 static const char *cursor_opts[] = {
   "arrow",
@@ -151,11 +154,11 @@ static const char *cursor_opts[] = {
 };
 
 static const int cursor_enums[] = {
-  SDL_SYSTEM_CURSOR_ARROW,
-  SDL_SYSTEM_CURSOR_IBEAM,
-  SDL_SYSTEM_CURSOR_SIZEWE,
-  SDL_SYSTEM_CURSOR_SIZENS,
-  SDL_SYSTEM_CURSOR_HAND
+  SDL_SYSTEM_CURSOR_DEFAULT,
+  SDL_SYSTEM_CURSOR_TEXT,
+  SDL_SYSTEM_CURSOR_EW_RESIZE,
+  SDL_SYSTEM_CURSOR_NS_RESIZE,
+  SDL_SYSTEM_CURSOR_POINTER
 };
 
 static int f_set_cursor(lua_State *L) {
@@ -184,7 +187,7 @@ enum { WIN_NORMAL, WIN_MAXIMIZED, WIN_FULLSCREEN };
 static int f_set_window_mode(lua_State *L) {
   int n = luaL_checkoption(L, 1, "normal", window_opts);
   SDL_SetWindowFullscreen(window,
-    n == WIN_FULLSCREEN ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    n == WIN_FULLSCREEN ? SDL_WINDOW_FULLSCREEN : 0);
   if (n == WIN_NORMAL) { SDL_RestoreWindow(window); }
   if (n == WIN_MAXIMIZED) { SDL_MaximizeWindow(window); }
   return 0;

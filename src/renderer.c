@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <assert.h>
@@ -83,7 +84,7 @@ void ren_set_clip_rect(RenRect rect) {
 
 
 void ren_get_size(int *x, int *y) {
-  SDL_Surface *surf = SDL_GetWindowSurface(window);
+  const SDL_Surface *surf = SDL_GetWindowSurface(window);
   *x = surf->w;
   *y = surf->h;
 }
